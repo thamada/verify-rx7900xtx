@@ -4,6 +4,20 @@
 >   This document is the change history. Timestamps come from the `date` command, in `YYYY-MM-DD HH:MM:SS` form.
 >   Newest entries are listed first.
 
+## 2026-10-22 00:53:37 — Leave room for the blit shaders on round 1
+
+- Each round runs `hipMemset` and a 1 MiB host-to-device copy on a scratch allocation, then frees it, before sampling free VRAM. That is what first loads the blit shaders
+- The fill no longer requests the last 64 MiB that `hipMemGetInfo` reports. Taking that remainder left nothing for the shader load, and the first `hipMemcpy` of round 1 returned `invalid argument`
+- `hipDeviceReset` drops the shaders, so every round loads them again and again leaves the 64 MiB
+
+## 2026-10-22 00:07:15 — Red FAIL lines on stderr in vram-test
+
+- Every `FAIL:` message from `vram-test` uses bold bright red on a terminal stderr (`NO_COLOR` and non-TTY stay plain)
+
+## 2026-10-22 00:05:25 — Green CPU-visible VRAM line when Resizable BAR looks active
+
+- When CPU-visible VRAM covers sysfs VRAM total, `vram-test` prints that startup line in bold bright green on a terminal (same `NO_COLOR` / non-TTY rules as the ReBAR warning)
+
 ## 2026-10-21 23:29:35 — Run on any HIP GPU when the RX 7900 XTX is absent
 
 - Device selection still prefers a GPU whose name contains `7900 XTX`

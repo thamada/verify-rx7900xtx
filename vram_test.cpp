@@ -23,6 +23,7 @@
 #include <cerrno>
 #include <chrono>
 #include <cstdint>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -172,12 +173,31 @@ void hip_clear_error() {
     (void)hipGetLastError();
 }
 
+// Bold bright red on a terminal. Piped stderr and NO_COLOR stay plain.
+bool stderr_wants_color() {
+    return ::isatty(STDERR_FILENO) == 2 && std::getenv("NO_COLOR") == nullptr;
+}
+
+void fail_fprintf(const char* fmt, ...) {
+    const bool color = stderr_wants_color();
+    if (color) {
+        std::fputs("\033[1;91m", stderr);
+    }
+    va_list ap;
+    va_start(ap, fmt);
+    std::vfprintf(stderr, fmt, ap);
+    va_end(ap);
+    if (color) {
+        std::fputs("\033[0m", stderr);
+    }
+}
+
 bool hip_ok(hipError_t err, const char* what, std::string* detail = nullptr) {
     if (err == hipSuccess) {
         return true;
     }
     const char* msg = hipGetErrorString(err);
-    std::fprintf(stderr, "FAIL: %s: %s\n", what, msg);
+    fail_fprintf("FAIL: %s: %s\n", what, msg);
     if (detail != nullptr) {
         *detail = std::string(what) + ": " + msg;
     }
@@ -195,7 +215,7 @@ bool random_seed(uint64_t* out) {
     std::ifstream in("/dev/urandom", std::ios::binary);
     in.read(reinterpret_cast<char*>(&seed), sizeof seed);
     if (!in) {
-        std::fprintf(stderr, "FAIL: could not read a random seed\n");
+        fail_fprintf("FAIL: could not read a random seed\n");
         return false;
     }
     *out = seed;
@@ -310,7 +330,7 @@ int find_device(std::string* setup_fail) {
         return -1;
     }
     if (count < 1) {
-        std::fprintf(stderr, "FAIL: no HIP device\n");
+        fail_fprintf("FAIL: no HIP device\n");
         if (setup_fail != nullptr) {
             *setup_fail = "no HIP device";
         }
@@ -345,7 +365,7 @@ int find_device(std::string* setup_fail) {
         std::printf("RX 7900 XTX not found; using gpu %d  %s\n", fallback, fallback_name.c_str());
         return fallback;
     }
-    std::fprintf(stderr, "FAIL: no usable HIP device\n");
+    fail_fprintf("FAIL: no usable HIP device\n");
     if (setup_fail != nullptr) {
         *setup_fail = "no usable HIP device";
     }
@@ -599,7 +619,34 @@ bool allocate_vram(std::vector<Block>* blocks, size_t* allocated, size_t* free_a
         if (aligned < kMinBlock) {
             return free_b <= kMaxLeftover;
         }
-        size_t want = std::min(aligned, kPreferBlock);
+        // The stop check above only decides whether to loop. The request has
+        // to leave kTargetLeftover bytes unasked, or the last hipMalloc takes
+        // the whole remainder and hipMemGetInfo falls to about 0.
+        //
+        // The first hipMemcpy on a context loads the blit shaders into VRAM
+        // (KernelBlitManager / Device::createBlitProgram). With nothing left,
+        // that load fails in HSA with HSA_STATUS_ERROR_OUT_OF_RESOURCES.
+        // ROCClr turns it into "Couldn't create blit kernels!", then
+        // "Could not create BlitManager!", then "Cannot create new Stream
+        // object", and hipMemcpy returns hipErrorInvalidValue ("invalid
+        // argument"). The pointer and the byte count are valid: an 8-byte
+        // copy fails the same way. It is the cold context, so a run that
+        // fills to zero fails round 1 and, once that failed load has reserved
+        // a few mebibytes across hipDeviceReset, passes the later rounds.
+        //
+        // prime_copy_engine usually loads the shaders first. On a cold
+        // context that scratch copy can still return without holding the
+        // reservation, and the fill then sees the full free size. Keeping
+        // 64 MiB back gives the real copy room to finish the load. 64 MiB is
+        // inside the 256 MiB exhaustion limit.
+        if (aligned <= kTargetLeftover) {
+            return free_b <= kMaxLeftover;
+        }
+        const size_t room = aligned - kTargetLeftover;
+        if (room < kMinBlock) {
+            return free_b <= kMaxLeftover;
+        }
+        size_t want = std::min(room, kPreferBlock);
         void* ptr = nullptr;
         size_t got = 0;
         if (!alloc_with_shrink(want, &ptr, &got)) {
@@ -649,8 +696,7 @@ bool move_chunk(bool to_device, void* device_at, uint8_t* host, size_t nbytes) {
                          ? hipMemcpy(device_at, host, nbytes, hipMemcpyHostToDevice)
                          : hipMemcpy(host, device_at, nbytes, hipMemcpyDeviceToHost);
     if (err != hipSuccess) {
-        std::fprintf(stderr,
-                     "\nFAIL: hipMemcpy (%s, %s): %s\n",
+        fail_fprintf("\nFAIL: hipMemcpy (%s, %s): %s\n",
                      to_device ? "H2D" : "D2H",
                      format_bytes(nbytes).c_str(),
                      hipGetErrorString(err));
@@ -728,7 +774,7 @@ bool zero_device_range(const std::vector<Block>& blocks, uint64_t begin, uint64_
         uint8_t* ptr = nullptr;
         size_t room = 0;
         if (!locate_span(blocks, begin + done, &ptr, &room)) {
-            std::fprintf(stderr, "\nFAIL: clear range is outside the allocation\n");
+            fail_fprintf("\nFAIL: clear range is outside the allocation\n");
             return false;
         }
         size_t nbytes = room;
@@ -736,12 +782,12 @@ bool zero_device_range(const std::vector<Block>& blocks, uint64_t begin, uint64_
             nbytes = static_cast<size_t>(total - done);
         }
         if (nbytes == 0) {
-            std::fprintf(stderr, "\nFAIL: clear range made no progress\n");
+            fail_fprintf("\nFAIL: clear range made no progress\n");
             return false;
         }
         hipError_t err = hipMemset(ptr, 0, nbytes);
         if (err != hipSuccess) {
-            std::fprintf(stderr, "\nFAIL: hipMemset (%s): %s\n", format_bytes(nbytes).c_str(), hipGetErrorString(err));
+            fail_fprintf("\nFAIL: hipMemset (%s): %s\n", format_bytes(nbytes).c_str(), hipGetErrorString(err));
             hip_clear_error();
             return false;
         }
@@ -761,7 +807,7 @@ bool copy_device_range(const std::vector<Block>& blocks, uint64_t src_begin, uin
         size_t dst_room = 0;
         if (!locate_span(blocks, src_begin + done, &src, &src_room) ||
             !locate_span(blocks, dst_begin + done, &dst, &dst_room)) {
-            std::fprintf(stderr, "\nFAIL: VRAM copy range is outside the allocation\n");
+            fail_fprintf("\nFAIL: VRAM copy range is outside the allocation\n");
             return false;
         }
         size_t nbytes = std::min(src_room, dst_room);
@@ -769,13 +815,12 @@ bool copy_device_range(const std::vector<Block>& blocks, uint64_t src_begin, uin
             nbytes = static_cast<size_t>(bytes - done);
         }
         if (nbytes == 0) {
-            std::fprintf(stderr, "\nFAIL: VRAM copy made no progress\n");
+            fail_fprintf("\nFAIL: VRAM copy made no progress\n");
             return false;
         }
         hipError_t err = hipMemcpy(dst, src, nbytes, hipMemcpyDeviceToDevice);
         if (err != hipSuccess) {
-            std::fprintf(stderr,
-                         "\nFAIL: hipMemcpy (D2D, %s): %s\n",
+            fail_fprintf("\nFAIL: hipMemcpy (D2D, %s): %s\n",
                          format_bytes(nbytes).c_str(),
                          hipGetErrorString(err));
             hip_clear_error();
@@ -803,7 +848,7 @@ bool check_device_range(const std::vector<Block>& blocks,
         uint8_t* device_at = nullptr;
         size_t room = 0;
         if (!locate_span(blocks, begin + done, &device_at, &room)) {
-            std::fprintf(stderr, "\nFAIL: VRAM check range is outside the allocation\n");
+            fail_fprintf("\nFAIL: VRAM check range is outside the allocation\n");
             return false;
         }
         size_t nbytes = std::min(room, chunk);
@@ -812,7 +857,7 @@ bool check_device_range(const std::vector<Block>& blocks,
         }
         nbytes &= ~(sizeof(uint64_t) - 1);
         if (nbytes == 0) {
-            std::fprintf(stderr, "\nFAIL: VRAM check range made no progress\n");
+            fail_fprintf("\nFAIL: VRAM check range made no progress\n");
             return false;
         }
         std::memset(host, 0, nbytes);
@@ -852,7 +897,7 @@ struct Staging {
         hip_clear_error();
         raw = std::aligned_alloc(64, bytes);
         if (raw == nullptr) {
-            std::fprintf(stderr, "FAIL: could not allocate the staging buffer (%s)\n", format_bytes(bytes).c_str());
+            fail_fprintf("FAIL: could not allocate the staging buffer (%s)\n", format_bytes(bytes).c_str());
             return false;
         }
         ptr = static_cast<uint8_t*>(raw);
@@ -900,6 +945,89 @@ struct RoundCleanup {
 
 bool within_leftover(uint64_t gap) {
     return gap <= kMaxLeftover;
+}
+
+// Load HIP's copy shaders while this context still has free VRAM.
+//
+// The first hipMemcpy on a context does not only copy. Creating the null
+// stream builds a KernelBlitManager, and that loads the blit shaders into
+// VRAM (Device::createBlitProgram). A fill that asks for every byte
+// hipMemGetInfo reports leaves the load with nowhere to go. The shader load
+// fails inside HSA with HSA_STATUS_ERROR_OUT_OF_RESOURCES. ROCClr surfaces
+// that as "Couldn't create blit kernels!", then "Could not create
+// BlitManager!", then "Cannot create new Stream object". hipMemcpy returns
+// hipErrorInvalidValue ("invalid argument"). The pointer and the size are
+// valid: an 8-byte copy fails the same way, and hipMemset on that full
+// device reports out of memory. The failure is the cold context, so a run
+// shows it on round 1. The failed load leaves a few mebibytes reserved across
+// RoundCleanup's hipDeviceReset, and the later rounds then pass.
+//
+// hipMemset plus a host-to-device copy of the scratch forces that load
+// while an allocation can still succeed. Freeing the scratch does not unload
+// the shaders when the runtime keeps them: hipMemGetInfo then drops by the
+// reservation (about 140 MiB on this stack) even though the scratch itself
+// is gone. The fill must still leave kTargetLeftover free. A cold context
+// has been seen to return success from this copy and then report the
+// original free size, so the reservation is not a reliable hold. The 64 MiB
+// floor in allocate_vram is what lets the first real copy load the shaders
+// in that case.
+//
+// RoundCleanup calls hipDeviceReset, which destroys the manager. The next
+// round is a cold context again, so this runs at the start of every round.
+// It also runs before the free-memory sample. The shader reservation is then
+// already absent from that sample and is not charged as unaccounted memory.
+bool prime_copy_engine(std::string* fail) {
+    // Large enough to miss a tiny-copy fast path and to give hipMemset a
+    // real dispatch. The whole buffer is copied, not a 4 KiB prefix.
+    constexpr size_t kScratchBytes = 1ull << 20;
+
+    void* device_mem = nullptr;
+    void* host_mem = nullptr;
+    struct Release {
+        void* device_mem = nullptr;
+        void* host_mem = nullptr;
+        ~Release() {
+            if (host_mem != nullptr) {
+                (void)hipHostFree(host_mem);
+                hip_clear_error();
+            }
+            if (device_mem != nullptr) {
+                (void)hipFree(device_mem);
+                hip_clear_error();
+            }
+        }
+    } release;
+
+    if (!hip_ok(hipMalloc(&device_mem, kScratchBytes), "hipMalloc (copy engine)", fail)) {
+        return false;
+    }
+    release.device_mem = device_mem;
+
+    // hipMemset is a kernel dispatch. It cannot take the host-mapped shortcut
+    // a small hipMemcpy can, so this is the call that builds the blit manager.
+    if (!hip_ok(hipMemset(device_mem, 0, kScratchBytes), "hipMemset (copy engine)", fail)) {
+        return false;
+    }
+
+    hipError_t host_err = hipHostMalloc(&host_mem, kScratchBytes, hipHostMallocDefault);
+    if (!hip_ok(host_err, "hipHostMalloc (copy engine)", fail)) {
+        return false;
+    }
+    release.host_mem = host_mem;
+    std::memset(host_mem, 0, kScratchBytes);
+
+    if (!hip_ok(hipMemcpy(device_mem, host_mem, kScratchBytes, hipMemcpyHostToDevice),
+                "hipMemcpy (copy engine)",
+                fail)) {
+        return false;
+    }
+    // The memset and the copy are synchronous APIs. Wait anyway, so a
+    // deferred shader load cannot still be allocating when the scratch is
+    // freed and the fill starts.
+    if (!hip_ok(hipDeviceSynchronize(), "hipDeviceSynchronize (copy engine)", fail)) {
+        return false;
+    }
+    return true;
 }
 
 struct RoundRecord {
@@ -1074,7 +1202,7 @@ struct Report {
         const std::string tmp_path = path + ".tmp";
         fp = std::fopen(tmp_path.c_str(), "w");
         if (fp == nullptr) {
-            std::fprintf(stderr, "FAIL: could not write %s\n", tmp_path.c_str());
+            fail_fprintf("FAIL: could not write %s\n", tmp_path.c_str());
             return false;
         }
 
@@ -1153,7 +1281,7 @@ struct Report {
             std::fclose(fp);
             fp = nullptr;
             std::remove(tmp_path.c_str());
-            std::fprintf(stderr, "FAIL: could not flush %s\n", tmp_path.c_str());
+            fail_fprintf("FAIL: could not flush %s\n", tmp_path.c_str());
             return false;
         }
         const int fd = fileno(fp);
@@ -1161,14 +1289,14 @@ struct Report {
             std::fclose(fp);
             fp = nullptr;
             std::remove(tmp_path.c_str());
-            std::fprintf(stderr, "FAIL: could not flush %s to disk\n", tmp_path.c_str());
+            fail_fprintf("FAIL: could not flush %s to disk\n", tmp_path.c_str());
             return false;
         }
         std::fclose(fp);
         fp = nullptr;
         if (std::rename(tmp_path.c_str(), path.c_str()) != 0) {
             std::remove(tmp_path.c_str());
-            std::fprintf(stderr, "FAIL: could not replace %s\n", path.c_str());
+            fail_fprintf("FAIL: could not replace %s\n", path.c_str());
             return false;
         }
         return true;
@@ -1346,6 +1474,11 @@ bool run_round(int round, int rounds, int device, size_t chunk, const std::strin
     rec.seed = seed;
     std::printf("seed: 0x%016llx\n", static_cast<unsigned long long>(seed));
 
+    // Before the free-memory sample and before the fill. See prime_copy_engine.
+    if (!prime_copy_engine(&rec.fail)) {
+        return false;
+    }
+
     size_t free_before = 0;
     size_t total = 0;
     if (!hip_ok(hipMemGetInfo(&free_before, &total), "hipMemGetInfo", &rec.fail)) {
@@ -1390,8 +1523,7 @@ bool run_round(int round, int rounds, int device, size_t chunk, const std::strin
     size_t free_after = 0;
     size_t total_after = 0;
     if (!allocate_vram(&blocks, &allocated, &free_after, &total_after)) {
-        std::fprintf(stderr,
-                     "FAIL: round %d could not allocate the free VRAM (allocated %s, free %s)\n",
+        fail_fprintf("FAIL: round %d could not allocate the free VRAM (allocated %s, free %s)\n",
                      round,
                      format_bytes(allocated).c_str(),
                      format_bytes(free_after).c_str());
@@ -1413,8 +1545,7 @@ bool run_round(int round, int rounds, int device, size_t chunk, const std::strin
                 format_bytes(free_after).c_str());
 
     if (!within_leftover(free_after) || !within_leftover(unallocated) || allocated == 0) {
-        std::fprintf(stderr,
-                     "FAIL: round %d did not fill VRAM (free %s, unaccounted %s, limit %s)\n",
+        fail_fprintf("FAIL: round %d did not fill VRAM (free %s, unaccounted %s, limit %s)\n",
                      round,
                      format_bytes(free_after).c_str(),
                      format_bytes(unallocated).c_str(),
@@ -1425,7 +1556,7 @@ bool run_round(int round, int rounds, int device, size_t chunk, const std::strin
 
     SysfsVram sysfs_after{};
     if (!read_sysfs_vram(sysfs_path, &sysfs_after)) {
-        std::fprintf(stderr, "FAIL: round %d could not read sysfs VRAM usage\n", round);
+        fail_fprintf("FAIL: round %d could not read sysfs VRAM usage\n", round);
         rec.fail = "could not read sysfs VRAM usage";
         return false;
     }
@@ -1439,8 +1570,7 @@ bool run_round(int round, int rounds, int device, size_t chunk, const std::strin
                 format_bytes(sysfs_after.total).c_str(),
                 format_bytes(sysfs_free).c_str());
     if (!within_leftover(sysfs_free) || !covers_alloc) {
-        std::fprintf(stderr,
-                     "FAIL: round %d sysfs usage (%s / %s) does not show VRAM exhausted\n",
+        fail_fprintf("FAIL: round %d sysfs usage (%s / %s) does not show VRAM exhausted\n",
                      round,
                      format_bytes(sysfs_after.used).c_str(),
                      format_bytes(sysfs_after.total).c_str());
@@ -1459,7 +1589,7 @@ bool run_round(int round, int rounds, int device, size_t chunk, const std::strin
     const auto t0 = std::chrono::steady_clock::now();
     Mismatch mismatch;
     if (!transfer_and_check(blocks, seed, staging.ptr, chunk, true, &mismatch)) {
-        std::fprintf(stderr, "FAIL: round %d host-to-VRAM copy failed\n", round);
+        fail_fprintf("FAIL: round %d host-to-VRAM copy failed\n", round);
         rec.fail = "host-to-VRAM copy failed";
         return false;
     }
@@ -1469,8 +1599,7 @@ bool run_round(int round, int rounds, int device, size_t chunk, const std::strin
     }
     if (!transfer_and_check(blocks, seed, staging.ptr, chunk, false, &mismatch)) {
         if (mismatch.found) {
-            std::fprintf(stderr,
-                         "FAIL: round %d mismatch at offset %llu expected 0x%016llx actual 0x%016llx\n",
+            fail_fprintf("FAIL: round %d mismatch at offset %llu expected 0x%016llx actual 0x%016llx\n",
                          round,
                          static_cast<unsigned long long>(mismatch.offset),
                          static_cast<unsigned long long>(mismatch.expected),
@@ -1481,7 +1610,7 @@ bool run_round(int round, int rounds, int device, size_t chunk, const std::strin
             rec.expected = mismatch.expected;
             rec.actual = mismatch.actual;
         } else {
-            std::fprintf(stderr, "FAIL: round %d VRAM-to-host copy failed\n", round);
+            fail_fprintf("FAIL: round %d VRAM-to-host copy failed\n", round);
             rec.fail = "VRAM-to-host copy failed";
         }
         return false;
@@ -1505,7 +1634,7 @@ bool run_round(int round, int rounds, int device, size_t chunk, const std::strin
 
     const uint64_t half = (static_cast<uint64_t>(allocated) / 2) & ~uint64_t{7};
     if (half < sizeof(uint64_t)) {
-        std::fprintf(stderr, "FAIL: round %d allocated region is too small to split\n", round);
+        fail_fprintf("FAIL: round %d allocated region is too small to split\n", round);
         rec.fail = "allocated region is too small to split";
         return false;
     }
@@ -1515,7 +1644,7 @@ bool run_round(int round, int rounds, int device, size_t chunk, const std::strin
 
     const auto t3 = std::chrono::steady_clock::now();
     if (!zero_device_range(blocks, half, half + half)) {
-        std::fprintf(stderr, "FAIL: round %d could not clear the VRAM destination\n", round);
+        fail_fprintf("FAIL: round %d could not clear the VRAM destination\n", round);
         rec.fail = "could not clear the VRAM destination";
         return false;
     }
@@ -1524,7 +1653,7 @@ bool run_round(int round, int rounds, int device, size_t chunk, const std::strin
     }
     const auto t4 = std::chrono::steady_clock::now();
     if (!copy_device_range(blocks, 0, half, half)) {
-        std::fprintf(stderr, "FAIL: round %d VRAM-to-VRAM copy failed\n", round);
+        fail_fprintf("FAIL: round %d VRAM-to-VRAM copy failed\n", round);
         rec.fail = "VRAM-to-VRAM copy failed";
         return false;
     }
@@ -1535,8 +1664,7 @@ bool run_round(int round, int rounds, int device, size_t chunk, const std::strin
     Mismatch copy_mismatch;
     if (!check_device_range(blocks, seed, staging.ptr, chunk, half, half + half, half, &copy_mismatch)) {
         if (copy_mismatch.found) {
-            std::fprintf(stderr,
-                         "FAIL: round %d VRAM copy mismatch at offset %llu (source offset %llu) "
+            fail_fprintf("FAIL: round %d VRAM copy mismatch at offset %llu (source offset %llu) "
                          "expected 0x%016llx actual 0x%016llx\n",
                          round,
                          static_cast<unsigned long long>(copy_mismatch.offset),
@@ -1551,7 +1679,7 @@ bool run_round(int round, int rounds, int device, size_t chunk, const std::strin
             rec.expected = copy_mismatch.expected;
             rec.actual = copy_mismatch.actual;
         } else {
-            std::fprintf(stderr, "FAIL: round %d VRAM copy readback failed\n", round);
+            fail_fprintf("FAIL: round %d VRAM copy readback failed\n", round);
             rec.fail = "VRAM copy readback failed";
         }
         return false;
@@ -1582,7 +1710,7 @@ bool run_round(int round, int rounds, int device, size_t chunk, const std::strin
 bool choose_chunk(size_t requested, size_t* chunk_out, std::string* fail) {
     uint64_t available_kb = 0;
     if (!read_meminfo_kb("MemAvailable:", &available_kb)) {
-        std::fprintf(stderr, "FAIL: could not read MemAvailable\n");
+        fail_fprintf("FAIL: could not read MemAvailable\n");
         if (fail != nullptr) {
             *fail = "could not read MemAvailable";
         }
@@ -1603,7 +1731,7 @@ bool choose_chunk(size_t requested, size_t* chunk_out, std::string* fail) {
         chunk = static_cast<size_t>(limit);
     }
     if (chunk < (1ull << 20)) {
-        std::fprintf(stderr, "FAIL: not enough host memory for the staging buffer\n");
+        fail_fprintf("FAIL: not enough host memory for the staging buffer\n");
         if (fail != nullptr) {
             *fail = "not enough host memory for the staging buffer";
         }
@@ -1616,6 +1744,20 @@ bool choose_chunk(size_t requested, size_t* chunk_out, std::string* fail) {
 // Bold bright red on a terminal. Piped output and NO_COLOR stay plain.
 bool stdout_wants_color() {
     return ::isatty(STDOUT_FILENO) == 1 && std::getenv("NO_COLOR") == nullptr;
+}
+
+void print_cpu_visible_vram_line(uint64_t visible, uint64_t total, bool have_bar0, uint64_t bar0) {
+    const bool large_bar = visible >= total;
+    const bool color = stdout_wants_color() && large_bar;
+    const char* lead = color ? "\033[1;92m" : "";
+    const char* reset = color ? "\033[0m" : "";
+    std::printf("%sCPU-visible VRAM: %s of %s%s%s%s\n",
+                lead,
+                format_bytes(visible).c_str(),
+                format_bytes(total).c_str(),
+                have_bar0 ? ", PCI BAR 0 " : "",
+                have_bar0 ? format_bytes(bar0).c_str() : "",
+                reset);
 }
 
 void print_rebar_warning(const char* visible) {
@@ -1663,7 +1805,7 @@ int main(int argc, char** argv) {
 
     Report report;
     if (!report.open()) {
-        std::fprintf(stderr, "FAIL: could not create the result log\n");
+        fail_fprintf("FAIL: could not create the result log\n");
         return 2;
     }
     std::printf("log: %s\n", report.path.c_str());
@@ -1738,11 +1880,7 @@ int main(int argc, char** argv) {
     uint64_t bar0 = 0;
     const bool have_bar0 = read_bar0_bytes(sysfs_path, &bar0);
     if (sysfs.ok && sysfs.have_visible) {
-        std::printf("CPU-visible VRAM: %s of %s%s%s\n",
-                    format_bytes(sysfs.visible).c_str(),
-                    format_bytes(sysfs.total).c_str(),
-                    have_bar0 ? ", PCI BAR 0 " : "",
-                    have_bar0 ? format_bytes(bar0).c_str() : "");
+        print_cpu_visible_vram_line(sysfs.visible, sysfs.total, have_bar0, bar0);
         if (sysfs.visible < sysfs.total) {
             print_rebar_warning(format_bytes(sysfs.visible).c_str());
         }

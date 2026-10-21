@@ -50,7 +50,8 @@ The only dependency is the ROCm HIP runtime (`libamdhip64`). There is no device 
    At startup only, also read `mem_info_vis_vram_total` (the CPU-visible part of VRAM) from the same directory and the size of PCI BAR 0 from the first line of its `resource` file, and print both. When the CPU-visible size is below `mem_info_vram_total`, print a warning that Resizable BAR is not active. The JSON log records `cpu_visible_vram_bytes`, `large_bar` and `pci_bar0_bytes`. This does not change pass or fail. See `bar-check.md`.
 
 2. **Copy until VRAM is full.**  
-   Call `hipMalloc` against free VRAM, at most 1 GiB per allocation. On failure, shrink the request by 64 MiB and retry. Copy from the host into each block with `hipMemcpyHostToDevice` in `CHUNK_MIB` units (256 MiB by default).
+   Before sampling free memory, `hipMemset` a 1 MiB scratch allocation, copy 1 MiB into it, synchronize, and free that scratch. Those are the first device operations on the context. HIP uses them to create the null stream and load the blit shaders into VRAM. When the runtime keeps the shaders, the free-memory sample already excludes them, so the reservation is not unaccounted memory. On a cold context the scratch copy can return without holding that reservation.  
+   Call `hipMalloc` against the free VRAM that remains, at most 1 GiB per allocation. On failure, shrink the request by 64 MiB and retry. Each request leaves 64 MiB of the reported free memory unasked, so the loop stops with HIP free at about 64 MiB instead of about 0. That remainder is the room the first real `hipMemcpy` needs to load the blit shaders when the scratch did not keep them. A fill that runs the reported free down to 0 fails that load with `invalid argument` on round 1. Copy from the host into each block with `hipMemcpyHostToDevice` in `CHUNK_MIB` units (256 MiB by default).
 
 3. **Confirm that VRAM is exhausted.**  
    All of the following must hold:
@@ -75,7 +76,7 @@ The only dependency is the ROCm HIP runtime (`libamdhip64`). There is no device 
    On a mismatch, write the round number, the byte offset from the start of the allocation, the expected value, and the actual value to stderr. A VRAM-copy mismatch also includes the source offset. That round fails.
 
 9. **Repeat.**  
-   At the end of the round, free the VRAM and call `hipDeviceReset` so the runtime cache releases it. The next round starts again by reading free capacity. The process succeeds only when all 10 rounds succeed. A failed round does not stop the remaining rounds.
+   At the end of the round, free the VRAM and call `hipDeviceReset` so the runtime cache releases it. Reset also drops the blit shaders, so the next round loads them again before it reads free capacity. The process succeeds only when all 10 rounds succeed. A failed round does not stop the remaining rounds.
 
 ## When host memory is smaller than VRAM
 
