@@ -506,6 +506,12 @@ struct Report {
     uint64_t vram_total = 0;
     bool have_vram_free = false;
     uint64_t vram_free = 0;
+    bool have_cpu_visible = false;
+    uint64_t cpu_visible = 0;
+    bool have_large_bar = false;
+    bool large_bar = false;
+    bool have_bar0 = false;
+    uint64_t bar0 = 0;
     bool have_host_memory = false;
     uint64_t host_memory = 0;
     bool have_host_available = false;
@@ -669,6 +675,20 @@ Report read_report(const Json& root, const std::string& path) {
         r.have_vram_free = true;
         r.vram_free = ju64(root.find("vram_free_bytes"));
     }
+    if (root.find("cpu_visible_vram_bytes") != nullptr) {
+        r.have_cpu_visible = true;
+        r.cpu_visible = ju64(root.find("cpu_visible_vram_bytes"));
+    }
+    if (const Json* bar = root.find("large_bar")) {
+        if (bar->type == Json::BOOL) {
+            r.have_large_bar = true;
+            r.large_bar = bar->b;
+        }
+    }
+    if (root.find("pci_bar0_bytes") != nullptr) {
+        r.have_bar0 = true;
+        r.bar0 = ju64(root.find("pci_bar0_bytes"));
+    }
     if (root.find("host_memory_bytes") != nullptr) {
         r.have_host_memory = true;
         r.host_memory = ju64(root.find("host_memory_bytes"));
@@ -723,6 +743,8 @@ constexpr const char* kReset = "\033[0m";
 constexpr const char* kBold = "\033[1m";
 constexpr const char* kDim = "\033[2m";
 constexpr const char* kRed = "\033[31m";
+constexpr const char* kBrightRed = "\033[91m";
+constexpr const char* kBoldBrightRed = "\033[1;91m";
 constexpr const char* kGreen = "\033[32m";
 constexpr const char* kYellow = "\033[33m";
 constexpr const char* kMagenta = "\033[35m";
@@ -2006,6 +2028,8 @@ std::string summary_result(const Report& report) {
     return text;
 }
 
+void add_rebar_finding(const Report& report, std::string* text);
+
 void summary_findings(const Report& report, std::string* known, std::string* open) {
     const int n = static_cast<int>(report.tests.size());
     int host_ok = 0;
@@ -2068,6 +2092,7 @@ void summary_findings(const Report& report, std::string* known, std::string* ope
         if (!report.reason.empty()) {
             add_sentence(known, "The setup failure reason above is the only fault the log names.");
         }
+        add_rebar_finding(report, known);
         add_sentence(open, "Whether this device would pass the host readback or the VRAM copy is not known.");
         add_sentence(open, summary_layer_limits());
         return;
@@ -2175,9 +2200,109 @@ void summary_findings(const Report& report, std::string* known, std::string* ope
         add_sentence(open, "Host memory was at least as large as the filled VRAM, so this run does not show a fill that cannot fit in host RAM.");
     }
     add_sentence(open, summary_layer_limits());
+    add_rebar_finding(report, known);
+}
+
+bool rebar_inactive(const Report& report) {
+    return report.have_large_bar && !report.large_bar;
+}
+
+void add_rebar_finding(const Report& report, std::string* text) {
+    if (!rebar_inactive(report)) {
+        return;
+    }
+    std::string sentence = "Resizable BAR is not active";
+    if (report.have_cpu_visible) {
+        sentence += ": only " + format_bytes(report.cpu_visible) + " of VRAM is CPU-visible";
+    }
+    if (report.have_bar0) {
+        sentence += report.have_cpu_visible ? ", and PCI BAR 0 is " + format_bytes(report.bar0)
+                                            : ". PCI BAR 0 is " + format_bytes(report.bar0);
+    }
+    sentence += ". The copy checks do not use that window, so a pass does not show that software can map VRAM into the host. "
+                "Enable Above 4G Decoding and Re-Size BAR Support in the BIOS, with CSM off. See doc/bar-check.md.";
+    add_sentence(text, sentence);
+}
+
+std::string rebar_warning_body(const Report& report) {
+    std::string text;
+    if (report.have_cpu_visible) {
+        text += "only " + format_bytes(report.cpu_visible) + " of VRAM is CPU-visible: ";
+    }
+    text += "Resizable BAR is not active.";
+    if (report.have_bar0) {
+        text += " PCI BAR 0 is " + format_bytes(report.bar0) + ".";
+    }
+    text += " Enable \"Above 4G Decoding\" and \"Re-Size BAR Support\" in the BIOS (CSM off).";
+    text += " This copy test still passes; software that maps VRAM into the host fails.";
+    text += " See doc/bar-check.md.";
+    return text;
+}
+
+void print_rebar_warning(const Style& style, const Report& report) {
+    if (!rebar_inactive(report)) {
+        return;
+    }
+    const std::string text = rebar_warning_body(report);
+    const int width = std::max(24, style.width);
+    const int indent = 2;
+    const std::string lead = "WARNING: ";
+    const int hang = indent + static_cast<int>(utf8_cols(lead));
+    std::string line;
+    int cols = 0;
+    bool first = true;
+    std::string word;
+    auto flush = [&]() {
+        if (line.empty()) {
+            return;
+        }
+        if (first) {
+            std::cout << std::string(static_cast<size_t>(indent), ' ') << style.paint(lead, kBoldBrightRed)
+                      << style.paint(line, kBrightRed) << "\n";
+            first = false;
+        } else {
+            std::cout << style.paint(std::string(static_cast<size_t>(hang), ' ') + line, kBrightRed) << "\n";
+        }
+        line.clear();
+        cols = 0;
+    };
+    auto take = [&](const std::string& token) {
+        const int w = utf8_cols(token);
+        if (line.empty()) {
+            line = token;
+            cols = hang + w;
+            return;
+        }
+        if (cols + 1 + w > width) {
+            flush();
+            line = token;
+            cols = hang + w;
+            return;
+        }
+        line += " ";
+        line += token;
+        cols += 1 + w;
+    };
+    for (size_t i = 0; i <= text.size(); ++i) {
+        const bool end = i == text.size();
+        const unsigned char c = end ? ' ' : static_cast<unsigned char>(text[i]);
+        if (c == ' ' || c == '\n' || c == '\t') {
+            if (!word.empty()) {
+                take(word);
+                word.clear();
+            }
+            continue;
+        }
+        word.push_back(static_cast<char>(c));
+    }
+    flush();
 }
 
 void print_summary(const Style& style, const Report& report) {
+    if (rebar_inactive(report)) {
+        std::cout << "\n";
+        print_rebar_warning(style, report);
+    }
     std::cout << "\n";
     std::cout << style.paint("  Summary", kBold) << "\n";
 

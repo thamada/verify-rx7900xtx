@@ -38,6 +38,8 @@ and in the JSON log:
 
 The warning does not change pass or fail: the copy test still measures the copy path only.
 
+`vram-view` prints the same warning immediately before the Summary when `large_bar` is false. On a terminal it is red. The Summary states that the copy checks do not use that window, so a pass does not show that software can map VRAM into the host.
+
 ## Data from the affected host (2026-10-21)
 
 RX 7900 XTX, PCI `0000:03:00.0`, kernel `7.0.0-38-generic`, one round of the patched test:

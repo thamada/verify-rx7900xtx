@@ -4,6 +4,11 @@
 >   This document is the change history. Timestamps come from the `date` command, in `YYYY-MM-DD HH:MM:SS` form.
 >   Newest entries are listed first.
 
+## 2026-10-21 22:45:16 — Show the Resizable BAR warning in vram-view
+
+- When `large_bar` is false, `vram-view` prints the CPU-visible VRAM warning immediately before the Summary. On a terminal the warning is red
+- The Summary states the same fact: the copy checks do not use that window, so a pass does not show that software can map VRAM into the host
+
 ## 2026-10-21 19:46:16 — Report CPU-visible VRAM and the PCI BAR 0 size
 
 - At startup `vram-test` reads sysfs `mem_info_vis_vram_total` and the size of PCI BAR 0, prints them, and warns when the CPU-visible size is below VRAM (Resizable BAR not active)

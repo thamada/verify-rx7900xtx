@@ -1595,6 +1595,26 @@ bool choose_chunk(size_t requested, size_t* chunk_out, std::string* fail) {
     return true;
 }
 
+// Bold bright red on a terminal. Piped output and NO_COLOR stay plain.
+bool stdout_wants_color() {
+    return ::isatty(STDOUT_FILENO) == 1 && std::getenv("NO_COLOR") == nullptr;
+}
+
+void print_rebar_warning(const char* visible) {
+    const bool color = stdout_wants_color();
+    const char* lead = color ? "\033[1;91m" : "";
+    const char* body = color ? "\033[91m" : "";
+    const char* reset = color ? "\033[0m" : "";
+    std::printf("%sWARNING:%s only %s of VRAM is CPU-visible: Resizable BAR is not active.\n"
+                "         Enable \"Above 4G Decoding\" and \"Re-Size BAR Support\" in the BIOS (CSM off).\n"
+                "         This copy test still passes; software that maps VRAM into the host fails.\n"
+                "         See doc/bar-check.md.%s\n",
+                lead,
+                body,
+                visible,
+                reset);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -1707,11 +1727,7 @@ int main(int argc, char** argv) {
                     have_bar0 ? ", PCI BAR 0 " : "",
                     have_bar0 ? format_bytes(bar0).c_str() : "");
         if (sysfs.visible < sysfs.total) {
-            std::printf("WARNING: only %s of VRAM is CPU-visible: Resizable BAR is not active.\n"
-                        "         Enable \"Above 4G Decoding\" and \"Re-Size BAR Support\" in the BIOS (CSM off).\n"
-                        "         This copy test still passes; software that maps VRAM into the host fails.\n"
-                        "         See doc/bar-check.md.\n",
-                        format_bytes(sysfs.visible).c_str());
+            print_rebar_warning(format_bytes(sysfs.visible).c_str());
         }
     }
     const std::vector<TempReading> sensors = read_temperatures(hwmon_path);
