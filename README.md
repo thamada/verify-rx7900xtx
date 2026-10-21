@@ -70,4 +70,4 @@ Color is used when stdout is a terminal, unless `NO_COLOR` is set. `--plain` tur
 
 ## Details
 
-See [`doc/design.md`](doc/design.md) for the allocation rules, the byte pattern, and the output format. Change history is in [`doc/ChangeLog.md`](doc/ChangeLog.md).
+See [`doc/design.md`](doc/design.md) for the allocation rules, the byte pattern, and the output format. [`doc/blit-shaders.md`](doc/blit-shaders.md) explains why the fill leaves 64 MiB free and why the first copy returns `invalid argument` when it does not. Change history is in [`doc/ChangeLog.md`](doc/ChangeLog.md).

@@ -4,6 +4,11 @@
 >   This document is the change history. Timestamps come from the `date` command, in `YYYY-MM-DD HH:MM:SS` form.
 >   Newest entries are listed first.
 
+## 2026-10-22 01:18:35 — Document the blit-shader headroom
+
+- `doc/blit-shaders.md` explains why a fill that takes `hipMemGetInfo` to zero fails the first `hipMemcpy` with `invalid argument`, and why each round primes the copy engine and leaves 64 MiB
+- `README.md` and `doc/design.md` link to it
+
 ## 2026-10-22 00:53:37 — Leave room for the blit shaders on round 1
 
 - Each round runs `hipMemset` and a 1 MiB host-to-device copy on a scratch allocation, then frees it, before sampling free VRAM. That is what first loads the blit shaders
