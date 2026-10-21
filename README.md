@@ -1,6 +1,6 @@
 # verify-rx7900xtx
 
-VRAM test for the AMD Radeon RX 7900 XTX (`gfx1100`, about 24 GiB).
+VRAM test. It prefers the AMD Radeon RX 7900 XTX (`gfx1100`, about 24 GiB). When that GPU is not present, it runs on the first HIP device the runtime can see. It still stops when HIP reports no usable device.
 
 Each round fills free VRAM from host memory, copies it back, and checks that every byte matches. It then copies the first half of that VRAM onto the second half and checks that copy. `make run` does this 10 times. The test still works when host RAM is smaller than VRAM: the host keeps only a staging chunk and rebuilds the expected bytes from a per-round seed.
 

@@ -1,4 +1,4 @@
-# RX 7900 XTX VRAM test
+# VRAM test. Prefers the RX 7900 XTX, otherwise the first HIP GPU.
 #
 #   make run
 #   make run ROUNDS=10 CHUNK_MIB=256

@@ -4,9 +4,9 @@
 
 ## Overview
 
-The test copies data between host memory and the AMD Radeon RX 7900 XTX VRAM, then compares every byte. It then copies the first half of that VRAM onto the second half and compares the copy. It repeats both checks 10 times. The same procedure works when physical host memory is smaller than VRAM.
+The test copies data between host memory and GPU VRAM, then compares every byte. It then copies the first half of that VRAM onto the second half and compares the copy. It repeats both checks 10 times. The same procedure works when physical host memory is smaller than VRAM.
 
-The target device is the HIP device whose name contains `7900 XTX`. Its architecture name is `gfx1100`, and its VRAM size is about 24 GiB.
+The preferred device is the HIP device whose name contains `7900 XTX`. Its architecture name is `gfx1100`, and its VRAM size is about 24 GiB. When that device is absent, the test uses the first HIP device whose properties can be read, and prints that it is doing so. It still fails when `hipGetDeviceCount` fails, the runtime reports no device, or no device properties can be read.
 
 ## Files
 
@@ -100,7 +100,7 @@ The staging buffer is allocated with `hipHostMalloc` first. If that fails, the t
 |------|---------|
 | 0 | Every round passed |
 | 1 | One or more rounds failed |
-| 2 | Device not found, invalid arguments, or the host buffer could not be allocated |
+| 2 | No usable HIP device, invalid arguments, or the host buffer could not be allocated |
 
 ## Output
 

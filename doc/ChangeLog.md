@@ -4,6 +4,12 @@
 >   This document is the change history. Timestamps come from the `date` command, in `YYYY-MM-DD HH:MM:SS` form.
 >   Newest entries are listed first.
 
+## 2026-10-21 23:29:35 — Run on any HIP GPU when the RX 7900 XTX is absent
+
+- Device selection still prefers a GPU whose name contains `7900 XTX`
+- When that GPU is absent and HIP can read another device, the test uses the first such device and continues
+- Setup still fails when HIP reports no device or cannot query one
+
 ## 2026-10-21 22:45:16 — Show the Resizable BAR warning in vram-view
 
 - When `large_bar` is false, `vram-view` prints the CPU-visible VRAM warning immediately before the Summary. On a terminal the warning is red

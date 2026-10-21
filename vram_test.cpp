@@ -1,4 +1,5 @@
-// VRAM test for the RX 7900 XTX.
+// VRAM test. Prefers the RX 7900 XTX when that GPU is present. Any other HIP
+// device is used when the XTX is absent and the runtime can see a GPU.
 //
 // Works when host RAM is smaller than VRAM. The host only holds a staging
 // chunk. Each 8-byte word is a function of the seed and the word index, so the
@@ -303,16 +304,21 @@ bool is_rx7900xtx(const hipDeviceProp_t& prop) {
     return lower_compact(prop.name).find("7900xtx") != std::string::npos;
 }
 
-int find_device() {
+int find_device(std::string* setup_fail) {
     int count = 0;
-    if (!hip_ok(hipGetDeviceCount(&count), "hipGetDeviceCount")) {
+    if (!hip_ok(hipGetDeviceCount(&count), "hipGetDeviceCount", setup_fail)) {
         return -1;
     }
     if (count < 1) {
         std::fprintf(stderr, "FAIL: no HIP device\n");
+        if (setup_fail != nullptr) {
+            *setup_fail = "no HIP device";
+        }
         return -1;
     }
-    int found = -1;
+    int preferred = -1;
+    int fallback = -1;
+    std::string fallback_name;
     for (int i = 0; i < count; ++i) {
         hipDeviceProp_t prop{};
         if (hipGetDeviceProperties(&prop, i) != hipSuccess) {
@@ -324,14 +330,26 @@ int find_device() {
                     prop.name,
                     prop.gcnArchName,
                     format_bytes(prop.totalGlobalMem).c_str());
-        if (found < 0 && is_rx7900xtx(prop)) {
-            found = i;
+        if (fallback < 0) {
+            fallback = i;
+            fallback_name = prop.name;
+        }
+        if (preferred < 0 && is_rx7900xtx(prop)) {
+            preferred = i;
         }
     }
-    if (found < 0) {
-        std::fprintf(stderr, "FAIL: RX 7900 XTX not found\n");
+    if (preferred >= 0) {
+        return preferred;
     }
-    return found;
+    if (fallback >= 0) {
+        std::printf("RX 7900 XTX not found; using gpu %d  %s\n", fallback, fallback_name.c_str());
+        return fallback;
+    }
+    std::fprintf(stderr, "FAIL: no usable HIP device\n");
+    if (setup_fail != nullptr) {
+        *setup_fail = "no usable HIP device";
+    }
+    return -1;
 }
 
 std::string pci_bus_id(int device) {
@@ -1673,10 +1691,9 @@ int main(int argc, char** argv) {
         }
     } finish{&report, &exit_code, &failed, &ran, &setup_fail};
 
-    std::printf("=== VRAM test (RX 7900 XTX) ===\n");
-    const int device = find_device();
+    std::printf("=== VRAM test ===\n");
+    const int device = find_device(&setup_fail);
     if (device < 0) {
-        setup_fail = "RX 7900 XTX not found";
         return exit_code;
     }
     if (!hip_ok(hipSetDevice(device), "hipSetDevice", &setup_fail)) {
