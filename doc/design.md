@@ -21,6 +21,9 @@ The preferred device is the HIP device whose name contains `7900 XTX`. Its archi
 | `doc/design.md` | This design specification |
 | `doc/ChangeLog.md` | Change history |
 | `doc/blit-shaders.md` | Why a full fill fails the first copy, and the 64 MiB headroom |
+| `misc/kfd_public_vram.cpp` | KFD public-VRAM check. Built only from `misc/` |
+| `misc/Makefile` | Build and run `kfd-public-vram` |
+| `doc/kfd-public-vram.md` | What that check counts, and the result on a 256 MiB BAR |
 
 ## Build and run
 
@@ -48,7 +51,7 @@ The only dependency is the ROCm HIP runtime (`libamdhip64`). There is no device 
 
 1. **Read the capacity.**  
    Print `totalGlobalMem` from `hipGetDeviceProperties`, and the free and total sizes from `hipMemGetInfo`. Also read sysfs `mem_info_vram_total` and `mem_info_vram_used` from the `/sys/class/drm/cardN/device` directory whose PCI bus ID matches the GPU.  
-   At startup only, also read `mem_info_vis_vram_total` (the CPU-visible part of VRAM) from the same directory and the size of PCI BAR 0 from the first line of its `resource` file, and print both. When the CPU-visible size is below `mem_info_vram_total`, print a warning that Resizable BAR is not active. The JSON log records `cpu_visible_vram_bytes`, `large_bar` and `pci_bar0_bytes`. This does not change pass or fail. See `bar-check.md`.
+   At startup only, also read `mem_info_vis_vram_total` (the CPU-visible part of VRAM) from the same directory and the size of PCI BAR 0 from the first line of its `resource` file, and print both. When the CPU-visible size is below `mem_info_vram_total`, print a warning that Resizable BAR is not active. The JSON log records `cpu_visible_vram_bytes`, `large_bar` and `pci_bar0_bytes`. This does not change pass or fail. See `bar-check.md`. The separate program `misc/kfd-public-vram` asks KFD for VRAM with the public flag and records whether each counted request returns `EINVAL`. See `kfd-public-vram.md`.
 
 2. **Copy until VRAM is full.**  
    Before sampling free memory, `hipMemset` a 1 MiB scratch allocation, copy 1 MiB into it, synchronize, and free that scratch. Those are the first device operations on the context. HIP uses them to create the null stream and load the blit shaders into VRAM. When the runtime keeps the shaders, the free-memory sample already excludes them, so the reservation is not unaccounted memory. On a cold context the scratch copy can return without holding that reservation.  

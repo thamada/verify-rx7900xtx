@@ -12,8 +12,10 @@ VRAM can be mapped into host memory at once. With Resizable BAR enabled the BIOS
 `hipMemcpy` moves data with the GPU's DMA engines and never needs the window, so the copy test fills and verifies all
 24 GiB either way. Software that maps VRAM into the host does need it: device memory allocated as host-accessible (for
 example a ROCm/KFD allocation with the public/host-access flag, used by runtimes that keep command buffers, kernel
-arguments or program code in CPU-visible VRAM) fails once that window is used up. On the affected host the kernel driver
-returned `EINVAL` for every host-visible VRAM allocation we requested.
+arguments or program code in CPU-visible VRAM) fails once that window is used up. On this host, `kfd-public-vram`
+counted 150 VRAM allocations with that flag, at sizes and attributes the same allocation accepts without it. Every one
+returned `EINVAL`. The same sizes without the flag succeeded, and one GTT allocation with the flag succeeded. See
+`kfd-public-vram.md`.
 
 ## What `vram-test` reports
 

@@ -4,6 +4,13 @@
 >   This document is the change history. Timestamps come from the `date` command, in `YYYY-MM-DD HH:MM:SS` form.
 >   Newest entries are listed first.
 
+## 2026-10-22 16:42:25 — Check KFD public VRAM allocations for EINVAL
+
+- `misc/kfd-public-vram` asks KFD for VRAM with the public flag, across the attribute sets and sizes the same allocation accepts without that flag, and exits 0 only when every counted request returns `EINVAL`
+- One GTT allocation with the public flag is printed and left out of the tally. Startup prints each assigned PCI BAR from sysfs `resource`. The program builds only from `misc/`
+- `doc/kfd-public-vram.md` describes the check. `doc/bar-check.md` and `doc/design.md` link to it
+- On this host, 150 of 150 counted allocations returned `EINVAL`
+
 ## 2026-10-22 01:18:35 — Document the blit-shader headroom
 
 - `doc/blit-shaders.md` explains why a fill that takes `hipMemGetInfo` to zero fails the first `hipMemcpy` with `invalid argument`, and why each round primes the copy engine and leaves 64 MiB
