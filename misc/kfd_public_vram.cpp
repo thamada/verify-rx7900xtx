@@ -15,6 +15,12 @@
 // Startup also prints each assigned PCI BAR from the device's sysfs resource
 // file: index, type, CPU address range, and size. BAR 0 is the VRAM window.
 //
+// KFD_IOC_ALLOC_MEM_FLAGS_CONTIGUOUS arrived in KFD ioctl 1.16. When the
+// headers used to build this program do not define it, the upstream value
+// (1 << 23) is used so the binary still builds. Attribute sets that include
+// that flag run only when the kernel reports ioctl 1.16 or newer. Older KFD
+// skips those sets; the other sets still run.
+//
 // Exit status:
 //   0  every counted host-access VRAM allocation returned EINVAL
 //   1  a counted allocation succeeded or returned some other errno
@@ -26,6 +32,14 @@
 
 #include <hip/hip_runtime_api.h>
 #include <linux/kfd_ioctl.h>
+
+// Upstream value since KFD ioctl 1.16. Older linux/kfd_ioctl.h copies omit it.
+#ifndef KFD_IOC_ALLOC_MEM_FLAGS_CONTIGUOUS
+#define KFD_IOC_ALLOC_MEM_FLAGS_CONTIGUOUS (1u << 23)
+#define KFD_PUBLIC_VRAM_CONTIGUOUS_FROM_FALLBACK 1
+#else
+#define KFD_PUBLIC_VRAM_CONTIGUOUS_FROM_FALLBACK 0
+#endif
 
 #include <sys/ioctl.h>
 #include <sys/mman.h>
@@ -61,6 +75,8 @@ constexpr uint32_t kCoherent = KFD_IOC_ALLOC_MEM_FLAGS_COHERENT;
 constexpr uint32_t kUncached = KFD_IOC_ALLOC_MEM_FLAGS_UNCACHED;
 constexpr uint32_t kExtCoherent = KFD_IOC_ALLOC_MEM_FLAGS_EXT_COHERENT;
 constexpr uint32_t kContiguous = KFD_IOC_ALLOC_MEM_FLAGS_CONTIGUOUS;
+constexpr uint32_t kContiguousIoctlMajor = 1;
+constexpr uint32_t kContiguousIoctlMinor = 16;
 
 struct AttrSet {
     const char* name;
@@ -216,11 +232,45 @@ std::string errno_text(int err) {
     return buf;
 }
 
+// Bold bright red on a terminal. Piped stderr and NO_COLOR stay plain.
+bool stderr_wants_color() {
+    return ::isatty(STDERR_FILENO) == 1 && std::getenv("NO_COLOR") == nullptr;
+}
+
+void stderr_vfprintf(const char* fmt, va_list ap) {
+    const bool color = stderr_wants_color();
+    if (color) {
+        std::fputs("\033[1;91m", stderr);
+    }
+    std::vfprintf(stderr, fmt, ap);
+    if (color) {
+        std::fputs("\033[0m", stderr);
+    }
+}
+
 void fail_fprintf(const char* fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
-    std::vfprintf(stderr, fmt, ap);
+    stderr_vfprintf(fmt, ap);
     va_end(ap);
+}
+
+void warn_fprintf(const char* fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    stderr_vfprintf(fmt, ap);
+    va_end(ap);
+}
+
+bool uses_contiguous(uint32_t attr) {
+    return (attr & kContiguous) != 0;
+}
+
+bool contiguous_vram_supported(uint32_t major, uint32_t minor) {
+    if (major > kContiguousIoctlMajor) {
+        return true;
+    }
+    return major == kContiguousIoctlMajor && minor >= kContiguousIoctlMinor;
 }
 
 template <typename T>
@@ -784,6 +834,30 @@ int main() {
         return 2;
     }
     std::printf("KFD ioctl %u.%u\n", version.major_version, version.minor_version);
+    const bool contiguous_ok = contiguous_vram_supported(version.major_version, version.minor_version);
+#if KFD_PUBLIC_VRAM_CONTIGUOUS_FROM_FALLBACK
+    std::printf("KFD_IOC_ALLOC_MEM_FLAGS_CONTIGUOUS: not in the build headers; using 1<<23\n");
+#endif
+    if (!contiguous_ok) {
+        warn_fprintf(
+            "WARNING: KFD ioctl %u.%u does not include contiguous VRAM allocation (added in 1.16).\n"
+            "         Contiguous attribute sets are skipped.\n"
+            "         A newer KFD UAPI and a matching kernel/amdgpu/KFD driver are required for those tests.\n",
+            version.major_version,
+            version.minor_version);
+        std::printf("contiguous VRAM: skipped (need KFD ioctl %u.%u or newer)\n",
+                    kContiguousIoctlMajor,
+                    kContiguousIoctlMinor);
+        std::printf("skipped sets:");
+        for (const AttrSet& set : kAttrSets) {
+            if (uses_contiguous(set.attr)) {
+                std::printf(" %s", set.name);
+            }
+        }
+        std::printf("\n");
+    } else {
+        std::printf("contiguous VRAM: enabled\n");
+    }
 
     kfd_ioctl_acquire_vm_args vm{};
     vm.drm_fd = static_cast<uint32_t>(drm);
@@ -820,8 +894,13 @@ int main() {
     }
 
     Tally tally;
+    int contiguous_sets_skipped = 0;
     std::vector<std::string> exceptions;
     for (const AttrSet& set : kAttrSets) {
+        if (!contiguous_ok && uses_contiguous(set.attr)) {
+            contiguous_sets_skipped += 1;
+            continue;
+        }
         for (uint64_t size : sizes) {
             const uint32_t control_flags = kVram | set.attr;
             const uint32_t host_flags = control_flags | kPublic;
@@ -878,6 +957,9 @@ int main() {
     std::printf("other errno: %d\n", tally.other);
     std::printf("allocated: %d\n", tally.allocated);
     std::printf("not counted: %d\n", tally.not_counted);
+    if (contiguous_sets_skipped > 0) {
+        std::printf("contiguous sets skipped: %d\n", contiguous_sets_skipped);
+    }
     if (!exceptions.empty()) {
         std::printf("did not return EINVAL:\n");
         for (const std::string& line : exceptions) {

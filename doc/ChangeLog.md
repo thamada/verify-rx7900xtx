@@ -4,6 +4,13 @@
 >   This document is the change history. Timestamps come from the `date` command, in `YYYY-MM-DD HH:MM:SS` form.
 >   Newest entries are listed first.
 
+## 2026-10-23 02:13:09 — Build and run kfd-public-vram without the contiguous flag
+
+- `misc/kfd-public-vram` still builds when `linux/kfd_ioctl.h` has no `KFD_IOC_ALLOC_MEM_FLAGS_CONTIGUOUS`. That build uses the upstream value `1 << 23` and `make` prints a note
+- Contiguous attribute sets run only when the kernel reports KFD ioctl 1.16 or newer. An older KFD skips them, prints a warning, and still runs the other sets
+- On a terminal the build note, the runtime warning, and `FAIL:` lines are bold bright red (`NO_COLOR` and non-TTY stay plain)
+- `doc/design.md` and `doc/bar-check.md` record the ioctl 1.16 gate. `doc/kfd-public-vram.md` is the full description
+
 ## 2026-10-22 16:42:25 — Check KFD public VRAM allocations for EINVAL
 
 - `misc/kfd-public-vram` asks KFD for VRAM with the public flag, across the attribute sets and sizes the same allocation accepts without that flag, and exits 0 only when every counted request returns `EINVAL`

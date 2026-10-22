@@ -14,8 +14,9 @@ VRAM can be mapped into host memory at once. With Resizable BAR enabled the BIOS
 example a ROCm/KFD allocation with the public/host-access flag, used by runtimes that keep command buffers, kernel
 arguments or program code in CPU-visible VRAM) fails once that window is used up. On this host, `kfd-public-vram`
 counted 150 VRAM allocations with that flag, at sizes and attributes the same allocation accepts without it. Every one
-returned `EINVAL`. The same sizes without the flag succeeded, and one GTT allocation with the flag succeeded. See
-`kfd-public-vram.md`.
+returned `EINVAL`. That count includes the three contiguous sets, which run when KFD ioctl is 1.16 or newer. An older
+KFD skips those sets and counts fewer lines. The same sizes without the flag succeeded, and one GTT allocation with
+the flag succeeded. See `kfd-public-vram.md`.
 
 ## What `vram-test` reports
 

@@ -49,7 +49,11 @@ Each set is tried at these sizes, when the size is a multiple of the host page a
 - the CPU-visible size from `mem_info_vis_vram_total`, when that file is readable
 - one page past that visible size, when the sum still fits in VRAM total
 
-A size already in the list is not repeated. On a 4 KiB page and a 256 MiB visible window, the visible size matches the 256 MiB seed, and the extra page makes ten sizes. Ten sizes times the fifteen sets is 150 counted lines when every control allocation succeeds.
+A size already in the list is not repeated. On a 4 KiB page and a 256 MiB visible window, the visible size matches the 256 MiB seed, and the extra page makes ten sizes. Ten sizes times the fifteen sets is 150 counted lines when every control allocation succeeds and contiguous VRAM is enabled.
+
+`CONTIGUOUS` was added in KFD ioctl 1.16 (`KFD_IOC_ALLOC_MEM_FLAGS_CONTIGUOUS`, bit 23). The program reads `AMDKFD_IOC_GET_VERSION` and runs the three sets that include that flag (`contiguous`, `coherent+contiguous`, `no-substitute+contiguous`) only when the kernel reports ioctl 1.16 or newer. An older KFD prints those names as skipped and leaves them out of the tally. The other twelve sets still run. On the same ten sizes that is 120 counted lines when every remaining control allocation succeeds. Skipped sets do not change the verdict by themselves.
+
+When the `linux/kfd_ioctl.h` used at build time does not define the macro, the program uses the upstream value `(1 << 23)` so it still builds. `make` prints a note in that case. At run time the binary prints the same fact, then enables or skips the contiguous sets from the kernel's ioctl version. A full run, including those sets, needs a newer KFD UAPI and a matching kernel/amdgpu/KFD driver.
 
 When a public allocation succeeds, the program maps it through the render node at the ioctl's mmap offset, unmaps it, and frees the allocation. A failure to free any allocation stops the run with exit code 2.
 
@@ -75,6 +79,15 @@ make clean      # remove that binary
 
 The program links `libamdhip64` for the device query. The allocations go through `/dev/kfd` and the matching `/dev/dri/renderD*` node.
 
+If the headers visible to that compile do not define `KFD_IOC_ALLOC_MEM_FLAGS_CONTIGUOUS`, `make` still builds the binary. It writes this note to stderr first. On a terminal the note is bold bright red. `NO_COLOR` or a pipe leaves it plain.
+
+```text
+NOTE: linux/kfd_ioctl.h does not define KFD_IOC_ALLOC_MEM_FLAGS_CONTIGUOUS.
+      This build uses the upstream flag value (1 << 23).
+      Contiguous VRAM tests run only when the kernel reports KFD ioctl 1.16 or newer.
+      A full run needs a newer KFD UAPI and a matching kernel/amdgpu/KFD driver.
+```
+
 ## Exit codes
 
 | Code | Verdict | Meaning |
@@ -83,7 +96,34 @@ The program links `libamdhip64` for the device query. The allocations go through
 | 1 | `not-all-einval` | A counted allocation succeeded, or returned some other errno |
 | 2 | `setup-failed` | The check could not be run, or no line could be counted |
 
-Exit 0 means the public VRAM requests were rejected. It does not grade the copy path. Exit 1 means at least one counted request was accepted or failed for another reason. The summary prints the counts of `EINVAL`, other errno, allocations, and lines that were not counted.
+Exit 0 means the public VRAM requests that were counted were rejected. It does not grade the copy path, and it does not claim that contiguous sets ran. Exit 1 means at least one counted request was accepted or failed for another reason. The summary prints the counts of `EINVAL`, other errno, allocations, and lines that were not counted. When contiguous sets were skipped it also prints `contiguous sets skipped`.
+
+On a kernel older than KFD ioctl 1.16 the program writes this warning to stderr before the allocations. On a terminal it is bold bright red. `NO_COLOR` or a pipe leaves it plain.
+
+```text
+WARNING: KFD ioctl 1.14 does not include contiguous VRAM allocation (added in 1.16).
+         Contiguous attribute sets are skipped.
+         A newer KFD UAPI and a matching kernel/amdgpu/KFD driver are required for those tests.
+```
+
+The version in the first line is the version the kernel reported. Stdout then prints one of:
+
+```text
+contiguous VRAM: enabled
+```
+
+```text
+contiguous VRAM: skipped (need KFD ioctl 1.16 or newer)
+skipped sets: contiguous coherent+contiguous no-substitute+contiguous
+```
+
+When sets are skipped, the summary adds `contiguous sets skipped: 3`. If the build headers lacked the macro, stdout also prints:
+
+```text
+KFD_IOC_ALLOC_MEM_FLAGS_CONTIGUOUS: not in the build headers; using 1<<23
+```
+
+`FAIL:` lines on stderr use the same bold bright red as the warning. `NO_COLOR` and a non-terminal stderr stay plain.
 
 ## Result on this host (2026-10-22)
 
