@@ -1,7 +1,7 @@
 # VRAM test. Prefers the RX 7900 XTX, otherwise the first HIP GPU.
 #
 #   make run
-#   make run ROUNDS=10 CHUNK_MIB=256
+#   make run ROUNDS=4 CHUNK_MIB=256
 #   make clean
 #
 # Each run writes vram-test-YYYYMMDD-HHMMSS.json in the current directory.
@@ -13,7 +13,7 @@
 ROCM  ?= /opt/rocm
 CXX   ?= g++
 
-ROUNDS    ?= 10
+ROUNDS    ?= 4
 CHUNK_MIB ?= 256
 
 TARGET := vram-test

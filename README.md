@@ -2,21 +2,21 @@
 
 VRAM test. It prefers the AMD Radeon RX 7900 XTX (`gfx1100`, about 24 GiB). When that GPU is not present, it runs on the first HIP device the runtime can see. It still stops when HIP reports no usable device.
 
-Each round fills free VRAM from host memory, copies it back, and checks that every byte matches. It then copies the first half of that VRAM onto the second half and checks that copy. `make run` does this 10 times. The test still works when host RAM is smaller than VRAM: the host keeps only a staging chunk and rebuilds the expected bytes from a per-round seed.
+Each round fills free VRAM from host memory, copies it back, and checks that every byte matches. It then copies the first half of that VRAM onto the second half and checks that copy. `make run` does this 4 times. The test still works when host RAM is smaller than VRAM: the host keeps only a staging chunk and rebuilds the expected bytes from a per-round seed.
 
 ## Usage
 
 Requires the ROCm HIP runtime (`/opt/rocm` by default).
 
 ```bash
-make run                         # build and run 10 rounds
-make run ROUNDS=10 CHUNK_MIB=256
+make run                         # build and run 4 rounds
+make run ROUNDS=4 CHUNK_MIB=256
 make clean
 ```
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ROUNDS` | 10 | Number of rounds |
+| `ROUNDS` | 4 | Number of rounds |
 | `CHUNK_MIB` | 256 | Host staging buffer size, in MiB |
 
 ## CPU-visible VRAM

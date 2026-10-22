@@ -43,7 +43,7 @@ constexpr size_t kMinBlock = 2ull << 20;          // 2 MiB
 constexpr size_t kTargetLeftover = 64ull << 20;   // keep allocating down to this
 constexpr size_t kMaxLeftover = 256ull << 20;     // fail if more than this remains free
 constexpr size_t kMaxChunk = 1ull << 30;          // 1 GiB
-constexpr int kDefaultRounds = 10;
+constexpr int kDefaultRounds = 4;
 constexpr size_t kDefaultChunkMiB = 256;
 
 struct Block {

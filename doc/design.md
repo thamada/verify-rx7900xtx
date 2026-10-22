@@ -4,7 +4,7 @@
 
 ## Overview
 
-The test copies data between host memory and GPU VRAM, then compares every byte. It then copies the first half of that VRAM onto the second half and compares the copy. It repeats both checks 10 times. The same procedure works when physical host memory is smaller than VRAM.
+The test copies data between host memory and GPU VRAM, then compares every byte. It then copies the first half of that VRAM onto the second half and compares the copy. It repeats both checks 4 times. The same procedure works when physical host memory is smaller than VRAM.
 
 The preferred device is the HIP device whose name contains `7900 XTX`. Its architecture name is `gfx1100`, and its VRAM size is about 24 GiB. When that device is absent, the test uses the first HIP device whose properties can be read, and prints that it is doing so. It still fails when `hipGetDeviceCount` fails, the runtime reports no device, or no device properties can be read.
 
@@ -28,9 +28,9 @@ The preferred device is the HIP device whose name contains `7900 XTX`. Its archi
 ## Build and run
 
 ```bash
-make run                         # build and run 10 rounds (default goal)
+make run                         # build and run 4 rounds (default goal)
 make build                       # build vram-test and vram-view
-make run ROUNDS=10 CHUNK_MIB=256
+make run ROUNDS=4 CHUNK_MIB=256
 make view                        # show the newest JSON log
 make view LOG=vram-test-20261021-153843.json
 make clean                       # remove the binaries, gpucore.*, and a leftover .json.tmp
@@ -38,12 +38,12 @@ make clean                       # remove the binaries, gpucore.*, and a leftove
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ROUNDS` | 10 | Number of rounds |
+| `ROUNDS` | 4 | Number of rounds |
 | `CHUNK_MIB` | 256 | Host staging buffer size, in MiB |
 | `ROCM` | `/opt/rocm` | ROCm installation prefix |
 | `CXX` | `g++` | Host compiler |
 
-The binary is invoked as `./vram-test <rounds> <chunk_mib>`. Running it with no arguments also uses 10 rounds and a 256 MiB chunk.
+The binary is invoked as `./vram-test <rounds> <chunk_mib>`. Running it with no arguments also uses 4 rounds and a 256 MiB chunk.
 
 The only dependency is the ROCm HIP runtime (`libamdhip64`). There is no device kernel. The host uses `hipMalloc`, `hipMemset`, and `hipMemcpy` only.
 
@@ -80,7 +80,7 @@ The only dependency is the ROCm HIP runtime (`libamdhip64`). There is no device 
    On a mismatch, write the round number, the byte offset from the start of the allocation, the expected value, and the actual value to stderr. A VRAM-copy mismatch also includes the source offset. That round fails.
 
 9. **Repeat.**  
-   At the end of the round, free the VRAM and call `hipDeviceReset` so the runtime cache releases it. Reset also drops the blit shaders, so the next round loads them again before it reads free capacity. The process succeeds only when all 10 rounds succeed. A failed round does not stop the remaining rounds.
+   At the end of the round, free the VRAM and call `hipDeviceReset` so the runtime cache releases it. Reset also drops the blit shaders, so the next round loads them again before it reads free capacity. The process succeeds only when all rounds succeed. A failed round does not stop the remaining rounds.
 
 ## When host memory is smaller than VRAM
 
